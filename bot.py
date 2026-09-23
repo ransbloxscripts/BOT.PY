@@ -407,6 +407,15 @@ def _find_place_or_universe_id_anywhere(obj):
                     return ("place", int(v))
                 except (ValueError, TypeError):
                     pass
+            # ScriptBlox nyimpennya di dalem field "game": {"id": ..., "name": ...}
+            # — "id" polos gini gak spesifik kayak placeId/gameId, jadi baru kita
+            # percaya kalau dia numeric (bukan string kayak _id Mongo yang isinya
+            # hex, otomatis gagal di int() dan dilewatin)
+            if key_lower == "id" and isinstance(v, (int, str)):
+                try:
+                    return ("place", int(v))
+                except (ValueError, TypeError):
+                    pass
             found = _find_place_or_universe_id_anywhere(v)
             if found:
                 return found
