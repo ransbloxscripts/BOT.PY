@@ -10,7 +10,7 @@ CHANNEL_ID = "-1003767281176"
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 FETCH_INTERVAL = 60
 DIGEST_INTERVAL = 2 * 3600
-INSTANT_MODE = True   # True = kirim langsung tiap ada script baru kedetect (buat testing). False = balik ke digest per 2 jam.
+INSTANT_MODE = False  # True = kirim langsung tiap ada script baru kedetect (buat testing). False = balik ke digest per 2 jam.
 
 # ── PLAYER MONITOR CONFIG ───────────────────────────────────────────────────
 # Watchlist sekarang OTOMATIS — tiap ada script baru kedetect, nama game-nya
@@ -463,11 +463,10 @@ def check_watchlist():
         elapsed_since_alert = time.time() - record.get("last_alert_ts", 0)
 
         # skip alert kalau data historisnya masih terlalu sedikit (rawan noise)
-        # dan cuma kirim kalau RAME — TURUN/STABIL tetep dihitung diam-diam di background
+        # sekarang kirim semua status (RAME/STABIL/TURUN) biar lu punya gambaran lengkap
         has_baseline = len(prev_counts) >= MIN_DATA_POINTS
         should_alert = (
             has_baseline and
-            status == "RAME" and
             (status != prev_status or elapsed_since_alert >= MIN_ALERT_GAP)
         )
 
