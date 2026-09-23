@@ -317,7 +317,23 @@ def _find_universe_id_anywhere(obj):
                 return found
     return None
 
-def search_universe_id_by_name(game_name):
+# Roblox suka ngeblokir sementara (HTTP 429) kalau omni-search dipanggil
+# kebanyakan/kecepetan — apalagi pas ada banyak game baru kedetect sekaligus
+# dalam satu loop. Dua hal ini nanganin itu:
+# 1) jarak minimal antar panggilan omni-search (throttle global)
+# 2) retry pake backoff kalau kena 429, bukan langsung nyerah
+_SEARCH_MIN_GAP_SECONDS = 3.0
+_last_search_call_ts = 0.0
+
+def _throttle_search():
+    global _last_search_call_ts
+    now = time.time()
+    wait = _SEARCH_MIN_GAP_SECONDS - (now - _last_search_call_ts)
+    if wait > 0:
+        time.sleep(wait)
+    _last_search_call_ts = time.time()
+
+def search_universe_id_by_name(game_name, max_retries=2):
     """Cari universeId Roblox berdasarkan nama game (buat game yang baru kedetect
     dari script, otomatis, tanpa perlu input manual place_id)."""
     headers = {
@@ -330,24 +346,36 @@ def search_universe_id_by_name(game_name):
         {"searchQuery": game_name},
     ]
     for params in attempts:
-        try:
-            res = requests.get(
-                "https://apis.roblox.com/search-api/omni-search",
-                params=params,
-                headers=headers,
-                timeout=10
-            )
-            if res.status_code != 200:
-                print(f"[SearchUniverse] '{game_name}' -> HTTP {res.status_code}: {res.text[:200]}")
-                continue
-            data = res.json()
-            uid = _find_universe_id_anywhere(data)
-            if uid:
-                return uid
-            else:
+        retry_delay = 2.0
+        for attempt in range(max_retries + 1):
+            _throttle_search()
+            try:
+                res = requests.get(
+                    "https://apis.roblox.com/search-api/omni-search",
+                    params=params,
+                    headers=headers,
+                    timeout=10
+                )
+                if res.status_code == 429:
+                    if attempt < max_retries:
+                        print(f"[SearchUniverse] '{game_name}' -> 429, retry dalam {retry_delay:.0f}s ({attempt+1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2
+                        continue
+                    print(f"[SearchUniverse] '{game_name}' -> 429 terus, nyerah buat variasi query ini")
+                    break
+                if res.status_code != 200:
+                    print(f"[SearchUniverse] '{game_name}' -> HTTP {res.status_code}: {res.text[:200]}")
+                    break
+                data = res.json()
+                uid = _find_universe_id_anywhere(data)
+                if uid:
+                    return uid
                 print(f"[SearchUniverse] '{game_name}' -> HTTP 200 tapi universeId gak ketemu di response: {str(data)[:200]}")
-        except Exception as e:
-            print(f"[SearchUniverse Error] '{game_name}': {e}")
+                break
+            except Exception as e:
+                print(f"[SearchUniverse Error] '{game_name}': {e}")
+                break
     return None
 
 ROBLOX_GAME_URL_RE = re.compile(r"roblox\.com/games/(\d+)", re.IGNORECASE)
