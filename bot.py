@@ -289,23 +289,55 @@ def send_digest(rs_list, sb_list, hour_start, hour_end):
     send_source_digest(rs_list, "RScripts", date_str, hour_start, hour_end, is_rs=True)
 
 # ── PLAYER MONITOR: RESOLVE GAME NAME → UNIVERSE ID ──────────────────────────
+def _find_universe_id_anywhere(obj):
+    """Nyisir seluruh struktur JSON (dict/list bersarang berapa pun dalamnya)
+    buat nemuin field universeId/universeIds, gak peduli di path mana dia nyempil.
+    Ini lebih tahan banting daripada nebak struktur response persis."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            key_lower = k.lower()
+            if key_lower == "universeid" and isinstance(v, (int, str)):
+                try:
+                    return int(v)
+                except (ValueError, TypeError):
+                    pass
+            if key_lower == "universeids" and isinstance(v, list) and v:
+                try:
+                    return int(v[0])
+                except (ValueError, TypeError):
+                    pass
+            found = _find_universe_id_anywhere(v)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_universe_id_anywhere(item)
+            if found:
+                return found
+    return None
+
 def search_universe_id_by_name(game_name):
     """Cari universeId Roblox berdasarkan nama game (buat game yang baru kedetect
     dari script, otomatis, tanpa perlu input manual place_id)."""
-    try:
-        res = requests.get(
-            "https://apis.roblox.com/search-api/omni-search",
-            params={"searchQuery": game_name, "sessionId": "ransblox-monitor", "verticalType": "game"},
-            timeout=10
-        )
-        data = res.json()
-        for group in data.get("searchResults", []):
-            for item in group.get("contents", []):
-                uid = item.get("universeId") or item.get("rootPlaceId")
-                if uid:
-                    return int(uid)
-    except Exception as e:
-        print(f"[SearchUniverse Error] '{game_name}': {e}")
+    attempts = [
+        {"searchQuery": game_name, "verticalType": "game"},
+        {"searchQuery": game_name},
+    ]
+    for params in attempts:
+        try:
+            res = requests.get(
+                "https://apis.roblox.com/search-api/omni-search",
+                params=params,
+                timeout=10
+            )
+            if res.status_code != 200:
+                continue
+            data = res.json()
+            uid = _find_universe_id_anywhere(data)
+            if uid:
+                return uid
+        except Exception as e:
+            print(f"[SearchUniverse Error] '{game_name}': {e}")
     return None
 
 def fetch_player_count(universe_id):
