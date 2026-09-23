@@ -322,7 +322,7 @@ def _find_universe_id_anywhere(obj):
 # dalam satu loop. Dua hal ini nanganin itu:
 # 1) jarak minimal antar panggilan omni-search (throttle global)
 # 2) retry pake backoff kalau kena 429, bukan langsung nyerah
-_SEARCH_MIN_GAP_SECONDS = 3.0
+_SEARCH_MIN_GAP_SECONDS = 8.0
 _last_search_call_ts = 0.0
 
 def _throttle_search():
@@ -346,7 +346,7 @@ def search_universe_id_by_name(game_name, max_retries=2):
         {"searchQuery": game_name},
     ]
     for params in attempts:
-        retry_delay = 2.0
+        retry_delay = 4.0
         for attempt in range(max_retries + 1):
             _throttle_search()
             try:
@@ -449,6 +449,12 @@ def extract_universe_id_from_script(script_data):
         return None
     found = _find_place_or_universe_id_anywhere(script_data)
     if not found:
+        # Debug: biar ketauan field apa aja yang sebenernya ada di data script
+        # ini, buat ngecek apa sumbernya (misal ScriptBlox) emang gak nyimpen
+        # ID/link game sama sekali, atau nyimpennya pake nama field yang beda
+        # dari yang kita cek di atas.
+        if isinstance(script_data, dict):
+            print(f"[ExtractID] gak ketemu ID di data script. Keys yang ada: {list(script_data.keys())}")
         return None
     kind, id_val = found
     if kind == "universe":
