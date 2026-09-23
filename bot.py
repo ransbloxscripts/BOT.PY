@@ -13,18 +13,17 @@ DIGEST_INTERVAL = 2 * 3600
 INSTANT_MODE = True   # True = kirim langsung tiap ada script baru kedetect (buat testing). False = balik ke digest per 2 jam.
 
 # ── PLAYER MONITOR CONFIG ───────────────────────────────────────────────────
-# Isi place_id game yang mau lu pantau rame/turunnya (ambil dari URL game Roblox)
-WATCHLIST = [
-    {"name": "Blox Fruits", "place_id": 2753915549},
-    {"name": "Brookhaven RP", "place_id": 4924922222},
-    # {"name": "Nama Game Lu", "place_id": 0000000000},
-]
+# Watchlist sekarang OTOMATIS — tiap ada script baru kedetect, nama game-nya
+# langsung ditambahin ke daftar pantauan (dicari universeId-nya sendiri).
+# Gak perlu isi manual lagi.
+DYNAMIC_WATCHLIST_FILE = ".dynamic_watchlist.json"
 MONITOR_INTERVAL = 15 * 60          # cek player count tiap 15 menit
 HISTORY_FILE = ".player_history.json"
 HISTORY_WINDOW_HOURS = 24           # baseline = rata-rata 24 jam terakhir
 SPIKE_THRESHOLD = 0.15              # +15% dari baseline = RAME
 DROP_THRESHOLD = -0.10              # -10% dari baseline = TURUN
 MIN_ALERT_GAP = 3 * 3600            # jarak minimal antar alert status sama
+MAX_TRACKED_GAMES = 40              # batas jumlah game yang dipantau bareng (jaga API rate)
 
 # ── DATE UTILS ────────────────────────────────────────────────────────────────
 WIB = timezone(timedelta(hours=7))
@@ -288,23 +287,25 @@ def send_digest(rs_list, sb_list, hour_start, hour_end):
     time.sleep(1)
     send_source_digest(rs_list, "RScripts", date_str, hour_start, hour_end, is_rs=True)
 
-# ── PLAYER MONITOR: FETCH ─────────────────────────────────────────────────────
-_universe_cache = {}
-
-def get_universe_id(place_id):
-    if place_id in _universe_cache:
-        return _universe_cache[place_id]
+# ── PLAYER MONITOR: RESOLVE GAME NAME → UNIVERSE ID ──────────────────────────
+def search_universe_id_by_name(game_name):
+    """Cari universeId Roblox berdasarkan nama game (buat game yang baru kedetect
+    dari script, otomatis, tanpa perlu input manual place_id)."""
     try:
         res = requests.get(
-            f"https://apis.roblox.com/universes/v1/places/{place_id}/universe",
+            "https://apis.roblox.com/search-api/omni-search",
+            params={"searchQuery": game_name, "sessionId": "ransblox-monitor", "verticalType": "game"},
             timeout=10
         )
-        uid = res.json().get("universeId")
-        _universe_cache[place_id] = uid
-        return uid
+        data = res.json()
+        for group in data.get("searchResults", []):
+            for item in group.get("contents", []):
+                uid = item.get("universeId") or item.get("rootPlaceId")
+                if uid:
+                    return int(uid)
     except Exception as e:
-        print(f"[UniverseID Error] place_id={place_id}: {e}")
-        return None
+        print(f"[SearchUniverse Error] '{game_name}': {e}")
+    return None
 
 def fetch_player_count(universe_id):
     try:
@@ -317,6 +318,51 @@ def fetch_player_count(universe_id):
     except Exception as e:
         print(f"[PlayerCount Error] universe_id={universe_id}: {e}")
         return None
+
+# ── PLAYER MONITOR: DYNAMIC WATCHLIST ────────────────────────────────────────
+def load_dynamic_watchlist():
+    if not os.path.exists(DYNAMIC_WATCHLIST_FILE):
+        return {}
+    try:
+        with open(DYNAMIC_WATCHLIST_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def save_dynamic_watchlist(wl):
+    try:
+        with open(DYNAMIC_WATCHLIST_FILE, "w") as f:
+            json.dump(wl, f)
+    except Exception as e:
+        print(f"[Watchlist Save Error] {e}")
+
+def track_game(game_name):
+    """Dipanggil tiap ada script baru kedetect. Nambahin game ke watchlist
+    dinamis kalau belum ada, dan coba resolve universeId-nya."""
+    if not game_name or game_name == "?":
+        return
+    wl = load_dynamic_watchlist()
+    if game_name in wl:
+        wl[game_name]["last_seen"] = time.time()
+        save_dynamic_watchlist(wl)
+        return
+
+    if len(wl) >= MAX_TRACKED_GAMES:
+        # buang entry yang paling lama gak muncul lagi
+        oldest_key = min(wl, key=lambda k: wl[k].get("last_seen", 0))
+        wl.pop(oldest_key, None)
+
+    universe_id = search_universe_id_by_name(game_name)
+    wl[game_name] = {
+        "universe_id": universe_id,
+        "last_seen": time.time(),
+        "added_at": time.time(),
+    }
+    save_dynamic_watchlist(wl)
+    if universe_id:
+        print(f"[Watchlist] + {game_name} (universeId {universe_id})")
+    else:
+        print(f"[Watchlist] + {game_name} (gagal resolve universeId, dilewati saat monitor)")
 
 # ── PLAYER MONITOR: HISTORY ───────────────────────────────────────────────────
 def load_history():
@@ -377,21 +423,26 @@ def format_alert(name, status, current, baseline, change_pct):
 
 def check_watchlist():
     history = load_history()
-    for game in WATCHLIST:
-        name = game["name"]
-        place_id = game["place_id"]
-        key = str(place_id)
+    wl = load_dynamic_watchlist()
 
-        universe_id = get_universe_id(place_id)
+    for game_name, info in list(wl.items()):
+        universe_id = info.get("universe_id")
+
+        # kalau belum kebresolve dulu (misal search sempat gagal), coba lagi
         if not universe_id:
-            print(f"[Skip] {name}: gagal ambil universeId")
-            continue
+            universe_id = search_universe_id_by_name(game_name)
+            if universe_id:
+                wl[game_name]["universe_id"] = universe_id
+            else:
+                print(f"[Skip] {game_name}: universeId belum ketemu")
+                continue
 
         current = fetch_player_count(universe_id)
         if current is None:
-            print(f"[Skip] {name}: gagal ambil player count")
+            print(f"[Skip] {game_name}: gagal ambil player count")
             continue
 
+        key = str(universe_id)
         points = record_point(history, key, current)
         counts = [p[1] for p in points["points"]]
         baseline = sum(counts) / len(counts) if counts else current
@@ -405,16 +456,17 @@ def check_watchlist():
             (status != prev_status or elapsed_since_alert >= MIN_ALERT_GAP)
         )
 
-        print(f"[Monitor] {name}: {current:,} players | baseline {baseline:,.0f} | {change_pct:+.1f}% | {status}")
+        print(f"[Monitor] {game_name}: {current:,} players | baseline {baseline:,.0f} | {change_pct:+.1f}% | {status}")
 
         if should_alert:
-            send_message(format_alert(name, status, current, baseline, change_pct))
+            send_message(format_alert(game_name, status, current, baseline, change_pct))
             points["last_alert_ts"] = time.time()
 
         points["last_status"] = status
         history[key] = points
 
     save_history(history)
+    save_dynamic_watchlist(wl)
 
 # ── INSTANT SEND (testing mode) ──────────────────────────────────────────────
 def send_instant_item(item, is_rs):
@@ -476,6 +528,7 @@ def process_rscripts(scripts, sent_map, pending, daily):
         raw_url = script.get("rawScript", "")
         loadstring = fetch_raw_loadstring(raw_url)
         entry = {"script": script, "loadstring": loadstring, "players": -1}
+        track_game(game_name)
         if INSTANT_MODE:
             send_instant_item(entry, is_rs=True)
             time.sleep(0.5)
@@ -504,6 +557,7 @@ def process_scriptblox(scripts, sent_map, pending, daily):
             continue
         loadstring = script.get("script", None)
         entry = {"script": script, "loadstring": loadstring, "players": -1}
+        track_game(game_name)
         if INSTANT_MODE:
             send_instant_item(entry, is_rs=False)
             time.sleep(0.5)
