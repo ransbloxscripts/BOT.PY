@@ -499,23 +499,54 @@ def save_dynamic_watchlist(wl):
     except Exception as e:
         print(f"[Watchlist Save Error] {e}")
 
+def _normalize_game_name(name):
+    """Normalize nama game biar bisa dicocokin antar sumber (RScripts vs
+    ScriptBlox) yang suka beda dikit — ada emoji, tag [UPD]/[NEW], simbol hias,
+    dst. Tanpa ini, 'Blade Ball' vs '⚔️Blade Ball [UPDATE]' bakal dianggap beda
+    padahal game yang sama."""
+    if not name:
+        return ""
+    cleaned = "".join(ch for ch in name if ch.isalnum() or ch.isspace())
+    cleaned = re.sub(r"\b(upd|update|new|fix|patched|updated)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
+    return cleaned
+
+def find_universe_id_by_matching_name(game_name, wl):
+    """Prioritas #2 (sebelum search API): cocokin nama game ini ke game yang
+    UDAH ke-resolve di watchlist (biasanya dari RScripts, yang emang wajib
+    nyimpen ID beneran). RScripts & ScriptBlox sering nge-upload game yang sama,
+    jadi kalau match, kita pinjem ID-nya — gak perlu manggil omni-search sama
+    sekali, dan hasilnya sama akuratnya karena tetep nunjuk ke game asli."""
+    target = _normalize_game_name(game_name)
+    if not target:
+        return None
+    for existing_name, info in wl.items():
+        uid = info.get("universe_id")
+        if uid and _normalize_game_name(existing_name) == target:
+            return uid
+    return None
+
 def track_game(game_name, script_data=None):
     """Dipanggil tiap ada script baru kedetect. Nambahin game ke watchlist
     dinamis kalau belum ada, dan coba resolve universeId-nya.
     Prioritas resolve: (1) ekstrak ID langsung dari data mentah script (paling
-    akurat, itu ID punya game aslinya), (2) fallback ke search by name kalau
-    gak ketemu ID di data script-nya."""
+    akurat, itu ID punya game aslinya) — biasanya berhasil buat RScripts,
+    (2) cocokin nama ke game lain yang udah ke-resolve di watchlist (biasanya
+    ScriptBlox nyocok ke game yang udah ketemu dari RScripts), (3) fallback ke
+    search by name kalau dua-duanya gak ketemu."""
     if not game_name or game_name == "?":
         return
     wl = load_dynamic_watchlist()
     if game_name in wl:
         wl[game_name]["last_seen"] = time.time()
-        # kalau sebelumnya gagal resolve, coba lagi lewat data script kalau ada
-        if not wl[game_name].get("universe_id") and script_data:
-            uid = extract_universe_id_from_script(script_data)
+        # kalau sebelumnya gagal resolve, coba lagi
+        if not wl[game_name].get("universe_id"):
+            uid = extract_universe_id_from_script(script_data) if script_data else None
+            if not uid:
+                uid = find_universe_id_by_matching_name(game_name, wl)
             if uid:
                 wl[game_name]["universe_id"] = uid
-                print(f"[Watchlist] ~ {game_name} akhirnya resolve dari data script (universeId {uid})")
+                print(f"[Watchlist] ~ {game_name} akhirnya resolve (universeId {uid})")
         save_dynamic_watchlist(wl)
         return
 
@@ -526,6 +557,9 @@ def track_game(game_name, script_data=None):
 
     universe_id = extract_universe_id_from_script(script_data) if script_data else None
     source = "data script"
+    if not universe_id:
+        universe_id = find_universe_id_by_matching_name(game_name, wl)
+        source = "cocokin nama ke game lain di watchlist"
     if not universe_id:
         universe_id = search_universe_id_by_name(game_name)
         source = "search nama"
