@@ -23,6 +23,7 @@ HISTORY_WINDOW_HOURS = 24           # baseline = rata-rata 24 jam terakhir
 SPIKE_THRESHOLD = 0.15              # +15% dari baseline = RAME
 DROP_THRESHOLD = -0.10              # -10% dari baseline = TURUN
 MIN_ALERT_GAP = 3 * 3600            # jarak minimal antar alert status sama
+MIN_DATA_POINTS = 3                 # minimal 3 titik data (≈15 menit history) sebelum berani nge-alert, biar gak kena noise/fluktuasi kecil
 MAX_TRACKED_GAMES = 40              # batas jumlah game yang dipantau bareng (jaga API rate)
 
 # ── DATE UTILS ────────────────────────────────────────────────────────────────
@@ -461,9 +462,9 @@ def check_watchlist():
         prev_status = record.get("last_status")
         elapsed_since_alert = time.time() - record.get("last_alert_ts", 0)
 
-        # skip alert pertama kali (belum ada baseline sama sekali buat dibandingin)
+        # skip alert kalau data historisnya masih terlalu sedikit (rawan noise)
         # dan cuma kirim kalau RAME — TURUN/STABIL tetep dihitung diam-diam di background
-        has_baseline = len(prev_counts) > 0
+        has_baseline = len(prev_counts) >= MIN_DATA_POINTS
         should_alert = (
             has_baseline and
             status == "RAME" and
