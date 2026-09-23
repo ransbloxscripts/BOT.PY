@@ -319,6 +319,11 @@ def _find_universe_id_anywhere(obj):
 def search_universe_id_by_name(game_name):
     """Cari universeId Roblox berdasarkan nama game (buat game yang baru kedetect
     dari script, otomatis, tanpa perlu input manual place_id)."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    }
     attempts = [
         {"searchQuery": game_name, "verticalType": "game"},
         {"searchQuery": game_name},
@@ -328,14 +333,18 @@ def search_universe_id_by_name(game_name):
             res = requests.get(
                 "https://apis.roblox.com/search-api/omni-search",
                 params=params,
+                headers=headers,
                 timeout=10
             )
             if res.status_code != 200:
+                print(f"[SearchUniverse] '{game_name}' -> HTTP {res.status_code}: {res.text[:200]}")
                 continue
             data = res.json()
             uid = _find_universe_id_anywhere(data)
             if uid:
                 return uid
+            else:
+                print(f"[SearchUniverse] '{game_name}' -> HTTP 200 tapi universeId gak ketemu di response: {str(data)[:200]}")
         except Exception as e:
             print(f"[SearchUniverse Error] '{game_name}': {e}")
     return None
