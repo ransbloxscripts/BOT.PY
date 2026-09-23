@@ -17,7 +17,7 @@ INSTANT_MODE = True   # True = kirim langsung tiap ada script baru kedetect (bua
 # langsung ditambahin ke daftar pantauan (dicari universeId-nya sendiri).
 # Gak perlu isi manual lagi.
 DYNAMIC_WATCHLIST_FILE = ".dynamic_watchlist.json"
-MONITOR_INTERVAL = 15 * 60          # cek player count tiap 15 menit
+MONITOR_INTERVAL = 5 * 60           # ngitung di background tiap 5 menit (biar cepet nangkep spike, gak nunggu lama)
 HISTORY_FILE = ".player_history.json"
 HISTORY_WINDOW_HOURS = 24           # baseline = rata-rata 24 jam terakhir
 SPIKE_THRESHOLD = 0.15              # +15% dari baseline = RAME
@@ -462,10 +462,11 @@ def check_watchlist():
         elapsed_since_alert = time.time() - record.get("last_alert_ts", 0)
 
         # skip alert pertama kali (belum ada baseline sama sekali buat dibandingin)
+        # dan cuma kirim kalau RAME — TURUN/STABIL tetep dihitung diam-diam di background
         has_baseline = len(prev_counts) > 0
         should_alert = (
             has_baseline and
-            status != "STABIL" and
+            status == "RAME" and
             (status != prev_status or elapsed_since_alert >= MIN_ALERT_GAP)
         )
 
