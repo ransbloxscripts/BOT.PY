@@ -443,15 +443,28 @@ def check_watchlist():
             continue
 
         key = str(universe_id)
-        points = record_point(history, key, current)
-        counts = [p[1] for p in points["points"]]
-        baseline = sum(counts) / len(counts) if counts else current
+        record = history.get(key, {"points": [], "last_status": None, "last_alert_ts": 0})
+
+        # baseline dihitung dari data LAMA (sebelum titik sekarang ditambahin),
+        # biar perbandingannya jujur — bukan ke-average sama dirinya sendiri
+        prev_counts = [p[1] for p in record["points"]]
+        baseline = sum(prev_counts) / len(prev_counts) if prev_counts else current
         change_pct = ((current - baseline) / baseline * 100) if baseline > 0 else 0
         status = classify(current, baseline)
-        prev_status = points.get("last_status")
-        elapsed_since_alert = time.time() - points.get("last_alert_ts", 0)
 
+        # baru sekarang titik ini dicatet buat baseline berikutnya
+        now_ts = time.time()
+        record["points"].append([now_ts, current])
+        cutoff = now_ts - (HISTORY_WINDOW_HOURS * 3600)
+        record["points"] = [p for p in record["points"] if p[0] >= cutoff]
+
+        prev_status = record.get("last_status")
+        elapsed_since_alert = time.time() - record.get("last_alert_ts", 0)
+
+        # skip alert pertama kali (belum ada baseline sama sekali buat dibandingin)
+        has_baseline = len(prev_counts) > 0
         should_alert = (
+            has_baseline and
             status != "STABIL" and
             (status != prev_status or elapsed_since_alert >= MIN_ALERT_GAP)
         )
@@ -460,10 +473,10 @@ def check_watchlist():
 
         if should_alert:
             send_message(format_alert(game_name, status, current, baseline, change_pct))
-            points["last_alert_ts"] = time.time()
+            record["last_alert_ts"] = time.time()
 
-        points["last_status"] = status
-        history[key] = points
+        record["last_status"] = status
+        history[key] = record
 
     save_history(history)
     save_dynamic_watchlist(wl)
