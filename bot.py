@@ -1,55 +1,54 @@
-import os
-import sys
-import json
-import requests
-import time
-from datetime import datetime, timezone, timedelta
+        print(f"🏆 Kirim Script of the Day {prev_label} ({len(daily_rs) + len(daily_sb)} kandidat)")
+        if send_script_of_the_day(daily_rs, daily_sb, prev_label):
+            daily_rs.clear()
+            daily_sb.clear()
+            state["daily_date"] = today_str
+            save_state(state)
+        else:
+            print("[Error] SOTD gagal terkirim, dicoba lagi di run berikutnya")
+            sys.exit(1)
 
-# ── CONFIG ────────────────────────────────────────────────────────────────────
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8627053450:AAFykZGpMgtphcyiTU4hI9nz4XiDlbJ2wOI")
-CHANNEL_ID = os.environ.get("CHANNEL_ID", "-1003767281176")
-TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
-DIGEST_INTERVAL = 2 * 3600
-STATE_FILE = "state.json"
+    # Fetch RScripts (sampai 5 halaman atau hingga tidak ada hari ini)
+    for page in range(1, 6):
+        scripts = fetch_rscripts(page)
+        if not scripts:
+            break
+        has_today = any(
+            is_today(s.get("createdAt", "")) or is_today(s.get("lastUpdated", ""))
+            for s in scripts
+        )
+        process_rscripts(scripts, sent_map, pending_rs, daily_rs)
+        if not has_today:
+            break
 
-# ── DATE UTILS ────────────────────────────────────────────────────────────────
-WIB = timezone(timedelta(hours=7))
+    # Fetch ScriptBlox (sampai 3 halaman)
+    for page in range(1, 4):
+        scripts = fetch_scriptblox(page)
+        if not scripts:
+            break
+        has_today = any(
+            is_today(s.get("createdAt", "")) or is_today(s.get("lastBump", ""))
+            for s in scripts
+        )
+        process_scriptblox(scripts, sent_map, pending_sb, daily_sb)
+        if not has_today:
+            break
 
-def parse_dt(iso_str):
-    if not iso_str:
-        return None
-    try:
-        iso_str = iso_str.replace("Z", "+00:00")
-        if "." in iso_str:
-            iso_str = iso_str.split(".")[0] + "+00:00"
-        dt = datetime.fromisoformat(iso_str)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except:
-        try:
-            dt = datetime.strptime(iso_str[:19], "%Y-%m-%dT%H:%M:%S")
-            return dt.replace(tzinfo=timezone.utc)
-        except:
-            return None
+    # Digest (tiap run = tiap 2 jam)
+    last_digest = state["last_digest"]
+    elapsed = (time.time() - last_digest) if last_digest else DIGEST_INTERVAL
+    hour_end = now_wib.strftime("%H:%M")
+    hour_start = (now_wib - timedelta(seconds=elapsed)).strftime("%H:%M")
+    total = len(pending_rs) + len(pending_sb)
+    print(f"📤 Kirim digest: {total} script ({hour_start}–{hour_end} WIB)")
 
-def time_ago(iso_str):
-    dt = parse_dt(iso_str)
-    if not dt:
-        return "?"
-    diff = int((datetime.now(timezone.utc) - dt).total_seconds())
-    if diff < 60:
-        return "baru saja"
-    elif diff < 3600:
-        return f"{diff // 60}m lalu"
-    elif diff < 86400:
-        h = diff // 3600
-        m = (diff % 3600) // 60
-        return f"{h}j {m}m lalu" if m else f"{h}j lalu"
+    if send_digest(pending_rs, pending_sb, hour_start, hour_end):
+        state["last_digest"] = time.time()
+        save_state(state)
     else:
-        return f"{diff // 86400}h lalu"
+        # state TIDAK disimpan -> script yang sama dicoba lagi di run berikutnya
+        print("[Error] Digest gagal terkirim, state tidak disimpan")
+        sys.exit(1)
 
-def is_today(iso_str):
-    dt = parse_dt(iso_str)
-    if not dt:
-        return False
+if __name__ == "__main__":
+    main()
