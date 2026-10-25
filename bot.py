@@ -57,6 +57,10 @@ def is_today(iso_str):
     today_wib = datetime.now(WIB).strftime("%Y-%m-%d")
     return dt_wib.strftime("%Y-%m-%d") == today_wib
 
+def is_new(iso_str, cutoff):
+    dt = parse_dt(iso_str)
+    return bool(dt) and dt >= cutoff
+
 # ── FETCH ─────────────────────────────────────────────────────────────────────
 def fetch_rscripts(page=1):
     try:
@@ -311,14 +315,14 @@ def save_state(st):
         json.dump(st, f, ensure_ascii=False)
 
 # ── PROCESS ───────────────────────────────────────────────────────────────────
-def process_rscripts(scripts, sent_map, pending, daily):
+def process_rscripts(scripts, sent_map, pending, daily, cutoff):
     for script in scripts:
         slug = script.get("slug", "")
         if not slug:
             continue
         created_at = script.get("createdAt", "")
         last_updated = script.get("lastUpdated", "") or created_at
-        if not is_today(created_at) and not is_today(last_updated):
+        if not is_new(created_at, cutoff) and not is_new(last_updated, cutoff):
             continue
         prev = sent_map.get(f"rs_{slug}")
         if prev == last_updated:
@@ -336,14 +340,14 @@ def process_rscripts(scripts, sent_map, pending, daily):
         label = "🔄" if prev else "✅"
         print(f"{label} [RScripts] {game_name}")
 
-def process_scriptblox(scripts, sent_map, pending, daily):
+def process_scriptblox(scripts, sent_map, pending, daily, cutoff):
     for script in scripts:
         slug = script.get("slug", "")
         if not slug:
             continue
         created_at = script.get("createdAt", "")
         last_bump = script.get("lastBump", "") or created_at
-        if not is_today(created_at) and not is_today(last_bump):
+        if not is_new(created_at, cutoff) and not is_new(last_bump, cutoff):
             continue
         prev = sent_map.get(f"sb_{slug}")
         if prev == last_bump:
@@ -390,31 +394,43 @@ def main():
             print("[Error] SOTD gagal terkirim, dicoba lagi di run berikutnya")
             sys.exit(1)
 
-    # Fetch RScripts (sampai 5 halaman atau hingga tidak ada hari ini)
-    for page in range(1, 6):
+    # Batas waktu: semua script sejak run sukses terakhir (dikurangi 30 menit
+    # sebagai pengaman). Duplikat dicegah oleh sent_map, jadi aman.
+    now_utc = datetime.now(timezone.utc)
+    if state["last_digest"]:
+        cutoff = datetime.fromtimestamp(state["last_digest"], timezone.utc) - timedelta(minutes=30)
+        cutoff = max(cutoff, now_utc - timedelta(hours=48))
+    else:
+        cutoff = now_wib.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    print(f"🕒 Ambil script sejak {cutoff.astimezone(WIB).strftime('%d %b %H:%M')} WIB")
+
+    # Fetch RScripts: terus buka halaman berikutnya selama masih ada yang baru
+    for page in range(1, 31):
         scripts = fetch_rscripts(page)
         if not scripts:
             break
-        has_today = any(
-            is_today(s.get("createdAt", "")) or is_today(s.get("lastUpdated", ""))
+        has_new = any(
+            is_new(s.get("createdAt", ""), cutoff) or is_new(s.get("lastUpdated", ""), cutoff)
             for s in scripts
         )
-        process_rscripts(scripts, sent_map, pending_rs, daily_rs)
-        if not has_today:
+        process_rscripts(scripts, sent_map, pending_rs, daily_rs, cutoff)
+        if not has_new:
             break
+        time.sleep(0.3)
 
-    # Fetch ScriptBlox (sampai 3 halaman)
-    for page in range(1, 4):
+    # Fetch ScriptBlox: sama
+    for page in range(1, 16):
         scripts = fetch_scriptblox(page)
         if not scripts:
             break
-        has_today = any(
-            is_today(s.get("createdAt", "")) or is_today(s.get("lastBump", ""))
+        has_new = any(
+            is_new(s.get("createdAt", ""), cutoff) or is_new(s.get("lastBump", ""), cutoff)
             for s in scripts
         )
-        process_scriptblox(scripts, sent_map, pending_sb, daily_sb)
-        if not has_today:
+        process_scriptblox(scripts, sent_map, pending_sb, daily_sb, cutoff)
+        if not has_new:
             break
+        time.sleep(0.3)
 
     # Digest (tiap run = tiap 2 jam)
     last_digest = state["last_digest"]
